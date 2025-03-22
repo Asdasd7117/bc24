@@ -1,7 +1,7 @@
 async function fetchIndicators(symbol) {
     try {
         let response = await fetch(`https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=1h&limit=100`);
-        if (!response.ok) throw new Error("فشل في جلب بيانات المؤشرات.");
+        if (!response.ok) throw new Error(`فشل في جلب بيانات ${symbol}`);
         let data = await response.json();
 
         let closingPrices = data.map(candle => parseFloat(candle[4])); // أسعار الإغلاق
@@ -15,53 +15,30 @@ async function fetchIndicators(symbol) {
     }
 }
 
-function calculateRSI(closingPrices, period = 14) {
-    let gains = [], losses = [];
-    for (let i = 1; i < closingPrices.length; i++) {
-        let diff = closingPrices[i] - closingPrices[i - 1];
-        gains.push(diff > 0 ? diff : 0);
-        losses.push(diff < 0 ? Math.abs(diff) : 0);
+async function getAllSymbols() {
+    try {
+        let response = await fetch("https://api.binance.com/api/v3/ticker/price");
+        if (!response.ok) throw new Error("فشل في جلب قائمة العملات.");
+        let data = await response.json();
+
+        let symbols = data.map(item => item.symbol).filter(symbol => symbol.endsWith("USDT"));
+        console.log("العملات المتاحة:", symbols); // تصحيح لمعرفة العملات المتاحة
+
+        return symbols;
+    } catch (error) {
+        console.error("خطأ في جلب العملات:", error);
+        return [];
     }
-    
-    let avgGain = gains.slice(0, period).reduce((a, b) => a + b, 0) / period;
-    let avgLoss = losses.slice(0, period).reduce((a, b) => a + b, 0) / period;
-    
-    for (let i = period; i < gains.length; i++) {
-        avgGain = (avgGain * (period - 1) + gains[i]) / period;
-        avgLoss = (avgLoss * (period - 1) + losses[i]) / period;
-    }
-
-    let rs = avgGain / avgLoss;
-    return 100 - (100 / (1 + rs));
-}
-
-function calculateMACD(closingPrices, shortPeriod = 12, longPeriod = 26, signalPeriod = 9) {
-    function ema(prices, period) {
-        let k = 2 / (period + 1);
-        return prices.reduce((acc, price, i) => {
-            if (i === 0) return [price];
-            acc.push(price * k + acc[i - 1] * (1 - k));
-            return acc;
-        }, []);
-    }
-
-    let shortEMA = ema(closingPrices, shortPeriod);
-    let longEMA = ema(closingPrices, longPeriod);
-    let macdLine = shortEMA.map((val, i) => val - longEMA[i]);
-    let signalLine = ema(macdLine, signalPeriod);
-
-    return { macd: macdLine[macdLine.length - 1], signal: signalLine[signalLine.length - 1] };
 }
 
 async function checkWhaleActivity() {
     let symbols = await getAllSymbols();
     if (symbols.length === 0) return;
-    
+
     let now = Date.now();
     let alertContainer = document.getElementById("alertContainer");
-    alertContainer.innerHTML = ""; 
 
-    for (let symbol of symbols) {
+    for (let symbol of symbols.slice(0, 10)) { // تجربة 10 عملات لتجنب الضغط الزائد
         let indicators = await fetchIndicators(symbol);
         if (!indicators) continue;
 
@@ -69,10 +46,9 @@ async function checkWhaleActivity() {
         let savedTime = localStorage.getItem(symbol);
 
         if (rsi < 30 && macd > signal) {
-            showAlert(symbol, `✅ فرصة شراء: ${symbol} في تشبع بيعي RSI = ${rsi.toFixed(2)}`, now);
-        } 
-        else if (rsi > 70 && macd < signal) {
-            showAlert(symbol, `⚠️ تحذير خروج: ${symbol} في تشبع شرائي RSI = ${rsi.toFixed(2)}`, now);
+            if (!savedTime) showAlert(symbol, `✅ فرصة شراء: ${symbol} RSI = ${rsi.toFixed(2)}`, now);
+        } else if (rsi > 70 && macd < signal) {
+            if (!savedTime) showAlert(symbol, `⚠️ تحذير خروج: ${symbol} RSI = ${rsi.toFixed(2)}`, now);
         }
     }
 
@@ -82,15 +58,19 @@ async function checkWhaleActivity() {
 
 function showAlert(symbol, message, time) {
     let alertContainer = document.getElementById("alertContainer");
+
+    // إذا كانت العملة موجودة بالفعل، لا تضفها مرة أخرى
+    if (document.querySelector(`.alertBox[data-symbol='${symbol}']`)) return;
+
     let alertBox = document.createElement("div");
     alertBox.className = "alertBox";
     alertBox.setAttribute("data-symbol", symbol);
     alertBox.setAttribute("data-time", time);
-    
+
     let timeElapsed = calculateElapsedTime(time);
     alertBox.innerHTML = `${message} <span class='time-elapsed'>${timeElapsed}</span> 
         <button onclick='removeAlert("${symbol}")'>×</button>`;
-    
+
     alertContainer.appendChild(alertBox);
     localStorage.setItem(symbol, time);
 }
@@ -109,10 +89,10 @@ function updateAlertTimes() {
 function calculateElapsedTime(time) {
     let now = Date.now();
     let diffMinutes = Math.floor((now - time) / 60000);
-    
+
     if (diffMinutes < 1) return "منذ الآن";
     if (diffMinutes < 60) return `منذ ${diffMinutes} دقيقة`;
-    
+
     let diffHours = Math.floor(diffMinutes / 60);
     if (diffHours < 24) return `منذ ${diffHours} ساعة`;
 
@@ -127,7 +107,7 @@ function removeExpiredAlerts() {
     for (let i = 0; i < localStorage.length; i++) {
         let symbol = localStorage.key(i);
         let savedTime = parseInt(localStorage.getItem(symbol), 10);
-        
+
         if (!isNaN(savedTime) && now - savedTime > expirationTime) {
             localStorage.removeItem(symbol);
             let alertBox = document.querySelector(`.alertBox[data-symbol='${symbol}']`);
@@ -144,7 +124,7 @@ function removeAlert(symbol) {
 
 function loadSavedAlerts() {
     let alertContainer = document.getElementById("alertContainer");
-    alertContainer.innerHTML = ""; 
+    alertContainer.innerHTML = "";
 
     let now = Date.now();
     for (let i = 0; i < localStorage.length; i++) {
@@ -153,9 +133,9 @@ function loadSavedAlerts() {
 
         if (!isNaN(savedTime)) {
             let message = savedTime % 2 === 0 
-                ? `✅ فرصة شراء: ${symbol} `
-                : `⚠️ تحذير خروج: ${symbol} `;
-            
+                ? `✅ فرصة شراء: ${symbol}`
+                : `⚠️ تحذير خروج: ${symbol}`;
+
             showAlert(symbol, message, savedTime);
         }
     }
@@ -167,5 +147,5 @@ window.onload = function() {
     checkWhaleActivity();
 };
 
-setInterval(checkWhaleActivity, 60000);
+setInterval(checkWhaleActivity, 60000); // تحديث كل دقيقة
 setInterval(updateAlertTimes, 60000);
