@@ -1,0 +1,13 @@
+body {
+    font-family: Arial, sans-serif;
+    text-align: center;
+    background-color: #f4f4f4;
+    padding: 20px;
+}
+.alertBox {
+    background-color: yellow;
+    padding: 10px;
+    margin: 5px auto;
+    border: 2px solid black;
+    width: 80%;
+}
