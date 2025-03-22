@@ -24,8 +24,17 @@ async function fetchMarketData(symbols) {
 
             let rsi = calculateRSI(prices);
             let macdData = calculateMACD(prices);
+            let supportResistance = calculateSupportResistance(prices);
 
-            return { ...ticker, avgPrice, rsi, macd: macdData.macd, signal: macdData.signal };
+            return { 
+                ...ticker, 
+                avgPrice, 
+                rsi, 
+                macd: macdData.macd, 
+                signal: macdData.signal,
+                support: supportResistance.support,
+                resistance: supportResistance.resistance
+            };
         }));
         return responses;
     } catch (error) {
@@ -63,6 +72,12 @@ function calculateMACD(prices) {
     return { macd, signal };
 }
 
+function calculateSupportResistance(prices) {
+    let support = Math.min(...prices);
+    let resistance = Math.max(...prices);
+    return { support, resistance };
+}
+
 async function checkWhaleActivity() {
     let symbols = await getAllSymbols();
     if (symbols.length === 0) return;
@@ -80,23 +95,31 @@ async function checkWhaleActivity() {
         let rsi = data.rsi;
         let macd = data.macd;
         let signal = data.signal;
-
-        let thresholdChange = -3;
-        let thresholdVolume = volume > 100000000 ? 5000000 : 1000000;
-        let now = Date.now();
-        let savedTime = localStorage.getItem(symbol);
+        let support = data.support;
+        let resistance = data.resistance;
 
         let trend = currentPrice > avgPrice ? "🔼 صعود" : "🔽 هبوط";
         let rsiStatus = rsi < 30 ? "🟢 تشبع بيعي" : rsi > 70 ? "🔴 تشبع شرائي" : "⚪️ متوازن";
         let macdStatus = macd > signal ? "📈 صعود قوي" : "📉 هبوط قوي";
+        let pricePosition = currentPrice < support ? "🔵 عند الدعم" : currentPrice > resistance ? "🔴 عند المقاومة" : "⚪️ في المنطقة الوسطى";
 
-        if (priceChange < thresholdChange && volume > thresholdVolume) {
+        let alertMessage = `
+            <strong>${symbol}</strong> - ${trend}<br>
+            RSI: ${rsi.toFixed(2)} (${rsiStatus})<br>
+            MACD: ${macd.toFixed(4)} / Signal: ${signal.toFixed(4)} (${macdStatus})<br>
+            ${pricePosition}
+        `;
+
+        let now = Date.now();
+        let savedTime = localStorage.getItem(symbol);
+
+        if (priceChange < -3 && volume > 1000000) {
             if (!savedTime) {
                 localStorage.setItem(symbol, now);
             }
-            showAlert(symbol, `🔥 ${symbol} انخفاض ${priceChange}% وتجميع الحيتان! (${trend}, ${rsiStatus}, ${macdStatus})`, "entry");
+            showAlert(symbol, `🔥 تجميع الحيتان! <br>${alertMessage}`, "entry");
         } else if (savedTime && now - savedTime < 86400000) {
-            showAlert(symbol, `⚠️ الحيتان تتراجع من ${symbol} (${trend}, ${rsiStatus}, ${macdStatus})`, "exit");
+            showAlert(symbol, `⚠️ خروج الحيتان! <br>${alertMessage}`, "exit");
         }
     });
 
@@ -109,33 +132,14 @@ function showAlert(symbol, message, type) {
     let alertBox = document.createElement("div");
     alertBox.className = type === "entry" ? "alertBox entry" : "alertBox exit";
     alertBox.setAttribute("data-symbol", symbol);
-    alertBox.innerHTML = `${message} <span class='time-elapsed'></span> <button onclick='this.parentElement.remove()'>×</button>`;
+    alertBox.innerHTML = `
+        <div class="alertContent">
+            ${message} 
+            <span class='time-elapsed'></span>
+        </div>
+        <button onclick='this.parentElement.remove()'>×</button>
+    `;
     alertContainer.appendChild(alertBox);
-}
-
-function updateAlertTimes() {
-    let now = Date.now();
-    document.querySelectorAll(".alertBox").forEach(alertBox => {
-        let symbol = alertBox.getAttribute("data-symbol");
-        let savedTime = localStorage.getItem(symbol);
-        if (savedTime) {
-            let elapsed = Math.floor((now - savedTime) / 60000);
-            let timeText = elapsed < 60 ? `${elapsed} دقيقة` : `${Math.floor(elapsed / 60)} ساعة`;
-            if (elapsed >= 1440) timeText = "24 ساعة";
-            alertBox.querySelector(".time-elapsed").textContent = ` منذ ${timeText}`;
-        }
-    });
-}
-
-function removeExpiredAlerts(symbols) {
-    let now = Date.now();
-    symbols.forEach(symbol => {
-        let savedTime = localStorage.getItem(symbol);
-        if (savedTime && (now - savedTime > 86400000)) {
-            localStorage.removeItem(symbol);
-            document.querySelectorAll(`[data-symbol='${symbol}']`).forEach(alert => alert.remove());
-        }
-    });
 }
 
 checkWhaleActivity();
