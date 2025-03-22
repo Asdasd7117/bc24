@@ -1,68 +1,83 @@
-async function getAllSymbols() {
+async function fetchIndicators(symbol) {
     try {
-        let response = await fetch("https://api.binance.com/api/v3/ticker/24hr");
-        if (!response.ok) throw new Error("فشل في جلب بيانات الرموز.");
+        let response = await fetch(`https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=1h&limit=100`);
+        if (!response.ok) throw new Error("فشل في جلب بيانات المؤشرات.");
         let data = await response.json();
-        return data.map(ticker => ticker.symbol).filter(symbol => symbol.endsWith("USDT"));
+
+        let closingPrices = data.map(candle => parseFloat(candle[4])); // أسعار الإغلاق
+        let rsi = calculateRSI(closingPrices);
+        let { macd, signal } = calculateMACD(closingPrices);
+
+        return { rsi, macd, signal };
     } catch (error) {
-        showError("خطأ في جلب جميع العملات: " + error.message);
-        return [];
+        console.error("خطأ في جلب المؤشرات:", error);
+        return null;
     }
 }
 
-async function fetchMarketData(symbols) {
-    try {
-        let responses = await Promise.all(symbols.map(symbol => 
-            fetch(`https://api.binance.com/api/v3/ticker/24hr?symbol=${symbol}`)
-            .then(res => res.ok ? res.json() : Promise.reject("فشل في جلب البيانات."))
-        ));
-        return responses;
-    } catch (error) {
-        showError("خطأ في جلب بيانات السوق: " + error);
-        return [];
+function calculateRSI(closingPrices, period = 14) {
+    let gains = [], losses = [];
+    for (let i = 1; i < closingPrices.length; i++) {
+        let diff = closingPrices[i] - closingPrices[i - 1];
+        gains.push(diff > 0 ? diff : 0);
+        losses.push(diff < 0 ? Math.abs(diff) : 0);
     }
+    
+    let avgGain = gains.slice(0, period).reduce((a, b) => a + b, 0) / period;
+    let avgLoss = losses.slice(0, period).reduce((a, b) => a + b, 0) / period;
+    
+    for (let i = period; i < gains.length; i++) {
+        avgGain = (avgGain * (period - 1) + gains[i]) / period;
+        avgLoss = (avgLoss * (period - 1) + losses[i]) / period;
+    }
+
+    let rs = avgGain / avgLoss;
+    return 100 - (100 / (1 + rs));
+}
+
+function calculateMACD(closingPrices, shortPeriod = 12, longPeriod = 26, signalPeriod = 9) {
+    function ema(prices, period) {
+        let k = 2 / (period + 1);
+        return prices.reduce((acc, price, i) => {
+            if (i === 0) return [price];
+            acc.push(price * k + acc[i - 1] * (1 - k));
+            return acc;
+        }, []);
+    }
+
+    let shortEMA = ema(closingPrices, shortPeriod);
+    let longEMA = ema(closingPrices, longPeriod);
+    let macdLine = shortEMA.map((val, i) => val - longEMA[i]);
+    let signalLine = ema(macdLine, signalPeriod);
+
+    return { macd: macdLine[macdLine.length - 1], signal: signalLine[signalLine.length - 1] };
 }
 
 async function checkWhaleActivity() {
     let symbols = await getAllSymbols();
     if (symbols.length === 0) return;
     
-    let marketData = await fetchMarketData(symbols);
     let alertContainer = document.getElementById("alertContainer");
     alertContainer.innerHTML = ""; 
 
-    let entries = [];
-    let exits = [];
+    for (let symbol of symbols) {
+        let indicators = await fetchIndicators(symbol);
+        if (!indicators) continue;
 
-    marketData.forEach(data => {
-        let symbol = data.symbol;
-        let priceChange = parseFloat(data.priceChangePercent);
-        let volume = parseFloat(data.quoteVolume);
-        let lastPrice = parseFloat(data.lastPrice);
-
-        let thresholdChange = -3;
-        let thresholdVolume = volume > 100000000 ? 5000000 : 1000000;
+        let { rsi, macd, signal } = indicators;
         let now = Date.now();
         let savedTime = localStorage.getItem(symbol);
 
-        let direction = priceChange > 0 ? "📈 صعود" : "📉 هبوط";
-        let suggestion = "";
-
-        if (priceChange < thresholdChange && volume > thresholdVolume) {
-            if (!savedTime) {
-                localStorage.setItem(symbol, now);
-            }
-            suggestion = `✅ فرصة دخول عند ${lastPrice}`;
-            entries.push({ symbol, message: `🔥 ${symbol} انخفاض ${priceChange}% وتجميع الحيتان! (${direction}) - ${suggestion}` });
-        } else if (savedTime && now - savedTime < 86400000) {
-            suggestion = `❌ فرصة خروج عند ${lastPrice}`;
-            exits.push({ symbol, message: `⚠️ الحيتان تتراجع من ${symbol} (${direction}) - ${suggestion}` });
+        if (rsi < 30 && macd > signal) {
+            showAlert(symbol, `✅ فرصة شراء: ${symbol} في تشبع بيعي RSI = ${rsi.toFixed(2)}`);
+            localStorage.setItem(symbol, now);
+        } 
+        else if (rsi > 70 && macd < signal) {
+            showAlert(symbol, `⚠️ تحذير خروج: ${symbol} في تشبع شرائي RSI = ${rsi.toFixed(2)}`);
+            localStorage.setItem(symbol, now);
         }
-    });
-
-    // ترتيب العملات بحيث تظهر العملات التي بها تجميع في الأعلى
-    [...entries, ...exits].forEach(({ symbol, message }) => showAlert(symbol, message));
-
+    }
+    
     updateAlertTimes();
     removeExpiredAlerts(symbols);
 }
@@ -74,43 +89,6 @@ function showAlert(symbol, message) {
     alertBox.setAttribute("data-symbol", symbol);
     alertBox.innerHTML = `${message} <span class='time-elapsed'></span> <button onclick='this.parentElement.remove()'>×</button>`;
     alertContainer.appendChild(alertBox);
-}
-
-function showError(message) {
-    let errorContainer = document.getElementById("errorContainer");
-    errorContainer.innerHTML = message;
-    setTimeout(() => errorContainer.innerHTML = "", 5000);
-}
-
-function updateAlertTimes() {
-    let now = Date.now();
-    document.querySelectorAll(".alertBox").forEach(alertBox => {
-        let symbol = alertBox.getAttribute("data-symbol");
-        let savedTime = localStorage.getItem(symbol);
-        if (savedTime) {
-            let elapsed = Math.floor((now - savedTime) / 60000);
-            let timeText = elapsed < 60 ? `${elapsed} دقيقة` : `${Math.floor(elapsed / 60)} ساعة`;
-            if (elapsed >= 1440) timeText = "24 ساعة";
-            alertBox.querySelector(".time-elapsed").textContent = ` منذ ${timeText}`;
-        }
-    });
-}
-
-function removeExpiredAlerts(symbols) {
-    let now = Date.now();
-    let alertContainer = document.getElementById("alertContainer");
-    symbols.forEach(symbol => {
-        let savedTime = localStorage.getItem(symbol);
-        if (savedTime && (now - savedTime > 86400000)) {
-            localStorage.removeItem(symbol);
-            let alertBoxes = [...alertContainer.getElementsByClassName("alertBox")];
-            alertBoxes.forEach(alertBox => {
-                if (alertBox.getAttribute("data-symbol") === symbol) {
-                    alertBox.remove();
-                }
-            });
-        }
-    });
 }
 
 checkWhaleActivity();
