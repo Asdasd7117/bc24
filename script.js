@@ -22,7 +22,7 @@ async function getAllSymbols() {
         let data = await response.json();
 
         let symbols = data.map(item => item.symbol).filter(symbol => symbol.endsWith("USDT"));
-        console.log("العملات المتاحة:", symbols); // تصحيح لمعرفة العملات المتاحة
+        console.log("العملات المتاحة:", symbols);
 
         return symbols;
     } catch (error) {
@@ -32,35 +32,34 @@ async function getAllSymbols() {
 }
 
 async function checkWhaleActivity() {
+    // مسح التخزين المحلي عند كل تحديث
+    localStorage.clear();
+    
     let symbols = await getAllSymbols();
     if (symbols.length === 0) return;
 
     let now = Date.now();
     let alertContainer = document.getElementById("alertContainer");
+    alertContainer.innerHTML = ""; // مسح التنبيهات القديمة من الواجهة
 
     for (let symbol of symbols.slice(0, 10)) { // تجربة 10 عملات لتجنب الضغط الزائد
         let indicators = await fetchIndicators(symbol);
         if (!indicators) continue;
 
         let { rsi, macd, signal } = indicators;
-        let savedTime = localStorage.getItem(symbol);
 
         if (rsi < 30 && macd > signal) {
-            if (!savedTime) showAlert(symbol, `✅ فرصة شراء: ${symbol} RSI = ${rsi.toFixed(2)}`, now);
+            showAlert(symbol, `✅ فرصة شراء: ${symbol} RSI = ${rsi.toFixed(2)}`, now);
         } else if (rsi > 70 && macd < signal) {
-            if (!savedTime) showAlert(symbol, `⚠️ تحذير خروج: ${symbol} RSI = ${rsi.toFixed(2)}`, now);
+            showAlert(symbol, `⚠️ تحذير خروج: ${symbol} RSI = ${rsi.toFixed(2)}`, now);
         }
     }
 
     updateAlertTimes();
-    removeExpiredAlerts();
 }
 
 function showAlert(symbol, message, time) {
     let alertContainer = document.getElementById("alertContainer");
-
-    // إذا كانت العملة موجودة بالفعل، لا تضفها مرة أخرى
-    if (document.querySelector(`.alertBox[data-symbol='${symbol}']`)) return;
 
     let alertBox = document.createElement("div");
     alertBox.className = "alertBox";
@@ -94,56 +93,18 @@ function calculateElapsedTime(time) {
     if (diffMinutes < 60) return `منذ ${diffMinutes} دقيقة`;
 
     let diffHours = Math.floor(diffMinutes / 60);
-    if (diffHours < 24) return `منذ ${diffHours} ساعة`;
+    return `منذ ${diffHours} ساعة`;
 
     let diffDays = Math.floor(diffHours / 24);
     return `منذ ${diffDays} يوم`;
 }
 
-function removeExpiredAlerts() {
-    let now = Date.now();
-    let expirationTime = 12 * 60 * 60 * 1000; // 12 ساعة
-
-    for (let i = 0; i < localStorage.length; i++) {
-        let symbol = localStorage.key(i);
-        let savedTime = parseInt(localStorage.getItem(symbol), 10);
-
-        if (!isNaN(savedTime) && now - savedTime > expirationTime) {
-            localStorage.removeItem(symbol);
-            let alertBox = document.querySelector(`.alertBox[data-symbol='${symbol}']`);
-            if (alertBox) alertBox.remove();
-        }
-    }
-}
-
 function removeAlert(symbol) {
-    localStorage.removeItem(symbol);
     let alertBox = document.querySelector(`.alertBox[data-symbol='${symbol}']`);
     if (alertBox) alertBox.remove();
 }
 
-function loadSavedAlerts() {
-    let alertContainer = document.getElementById("alertContainer");
-    alertContainer.innerHTML = "";
-
-    let now = Date.now();
-    for (let i = 0; i < localStorage.length; i++) {
-        let symbol = localStorage.key(i);
-        let savedTime = parseInt(localStorage.getItem(symbol), 10);
-
-        if (!isNaN(savedTime)) {
-            let message = savedTime % 2 === 0 
-                ? `✅ فرصة شراء: ${symbol}`
-                : `⚠️ تحذير خروج: ${symbol}`;
-
-            showAlert(symbol, message, savedTime);
-        }
-    }
-    updateAlertTimes();
-}
-
 window.onload = function() {
-    loadSavedAlerts();
     checkWhaleActivity();
 };
 
