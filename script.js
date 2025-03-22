@@ -1,10 +1,22 @@
+async function getAllSymbols() {
+    try {
+        let response = await fetch("https://api.binance.com/api/v3/ticker/24hr");
+        if (!response.ok) throw new Error("فشل في جلب بيانات الرموز.");
+        let data = await response.json();
+        return data.map(ticker => ticker.symbol).filter(symbol => symbol.endsWith("USDT"));
+    } catch (error) {
+        console.error("خطأ في جلب جميع العملات:", error);
+        return [];
+    }
+}
+
 async function fetchIndicators(symbol) {
     try {
         let response = await fetch(`https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=1h&limit=100`);
         if (!response.ok) throw new Error("فشل في جلب بيانات المؤشرات.");
         let data = await response.json();
 
-        let closingPrices = data.map(candle => parseFloat(candle[4])); // أسعار الإغلاق
+        let closingPrices = data.map(candle => parseFloat(candle[4]));
         let rsi = calculateRSI(closingPrices);
         let { macd, signal } = calculateMACD(closingPrices);
 
@@ -69,11 +81,11 @@ async function checkWhaleActivity() {
         let savedTime = localStorage.getItem(symbol);
 
         if (rsi < 30 && macd > signal) {
-            showAlert(symbol, `✅ فرصة شراء: ${symbol} في تشبع بيعي RSI = ${rsi.toFixed(2)}`);
+            showAlert(symbol, `✅ فرصة شراء: ${symbol} في تشبع بيعي RSI = ${rsi.toFixed(2)}`, now);
             localStorage.setItem(symbol, now);
         } 
         else if (rsi > 70 && macd < signal) {
-            showAlert(symbol, `⚠️ تحذير خروج: ${symbol} في تشبع شرائي RSI = ${rsi.toFixed(2)}`);
+            showAlert(symbol, `⚠️ تحذير خروج: ${symbol} في تشبع شرائي RSI = ${rsi.toFixed(2)}`, now);
             localStorage.setItem(symbol, now);
         }
     }
@@ -82,13 +94,53 @@ async function checkWhaleActivity() {
     removeExpiredAlerts(symbols);
 }
 
-function showAlert(symbol, message) {
+function showAlert(symbol, message, time) {
     let alertContainer = document.getElementById("alertContainer");
     let alertBox = document.createElement("div");
     alertBox.className = "alertBox";
     alertBox.setAttribute("data-symbol", symbol);
+    alertBox.setAttribute("data-time", time);
     alertBox.innerHTML = `${message} <span class='time-elapsed'></span> <button onclick='this.parentElement.remove()'>×</button>`;
     alertContainer.appendChild(alertBox);
+}
+
+function updateAlertTimes() {
+    let now = Date.now();
+    document.querySelectorAll(".alertBox").forEach(alertBox => {
+        let savedTime = parseInt(alertBox.getAttribute("data-time"), 10);
+        let elapsed = Math.floor((now - savedTime) / 60000); // بالمللي ثانية → دقائق
+
+        let timeText = "منذ الآن";
+        if (elapsed >= 1440) timeText = "منذ يوم";
+        else if (elapsed >= 60) timeText = `منذ ${Math.floor(elapsed / 60)} ساعة`;
+        else if (elapsed > 0) timeText = `منذ ${elapsed} دقيقة`;
+
+        alertBox.querySelector(".time-elapsed").textContent = timeText;
+    });
+
+    // ترتيب التنبيهات حسب الأحدث
+    let alerts = Array.from(document.querySelectorAll(".alertBox"));
+    alerts.sort((a, b) => parseInt(b.getAttribute("data-time"), 10) - parseInt(a.getAttribute("data-time"), 10));
+    let alertContainer = document.getElementById("alertContainer");
+    alertContainer.innerHTML = "";
+    alerts.forEach(alert => alertContainer.appendChild(alert));
+}
+
+function removeExpiredAlerts(symbols) {
+    let now = Date.now();
+    let alertContainer = document.getElementById("alertContainer");
+    symbols.forEach(symbol => {
+        let savedTime = localStorage.getItem(symbol);
+        if (savedTime && (now - savedTime > 86400000)) { // 24 ساعة
+            localStorage.removeItem(symbol);
+            let alertBoxes = [...alertContainer.getElementsByClassName("alertBox")];
+            alertBoxes.forEach(alertBox => {
+                if (alertBox.getAttribute("data-symbol") === symbol) {
+                    alertBox.remove();
+                }
+            });
+        }
+    });
 }
 
 checkWhaleActivity();
